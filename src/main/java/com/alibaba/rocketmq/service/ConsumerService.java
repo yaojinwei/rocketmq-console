@@ -3,15 +3,17 @@ package com.alibaba.rocketmq.service;
 import static com.alibaba.rocketmq.common.Tool.str;
 import static org.apache.commons.lang.StringUtils.isNotBlank;
 
-import java.util.Collection;
-import java.util.Collections;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 
+import com.alibaba.rocketmq.cache.CacheManager;
+import com.alibaba.rocketmq.common.protocol.body.GroupList;
+import com.alibaba.rocketmq.tools.command.topic.TopicListSubCommand;
 import org.apache.commons.cli.Option;
+import org.apache.commons.lang.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import com.alibaba.rocketmq.common.MQVersion;
@@ -44,6 +46,11 @@ public class ConsumerService extends AbstractService {
 
     static final Logger logger = LoggerFactory.getLogger(ConsumerService.class);
 
+    @Autowired
+    private LogMailService logMailService;
+    @Autowired
+    private CacheManager cacheManager;
+
     static final ConsumerProgressSubCommand consumerProgressSubCommand = new ConsumerProgressSubCommand();
 
 
@@ -51,6 +58,74 @@ public class ConsumerService extends AbstractService {
         return getOptions(consumerProgressSubCommand);
     }
 
+    /**
+     * 主要用于邮箱发送
+     * @param list
+     */
+    private void sendStackOverMail(List list) {
+        String title = "RocketMQ消息堆积超出上限!";
+        StringBuffer contentBuffer = new StringBuffer();
+        contentBuffer.append("RocketMQ消息堆积超出上限（" + configureInitializer.getStackOverNum() + "），请及时处理！点击<a href='http://" + configureInitializer.getDomain() + "/consumer/consumerProgress.do'> 这里 </a> 进入查看<br/>");
+        contentBuffer.append("<br/>堆积的消费者群组：").append("<br/>");
+        for(int i=0;i<list.size();i++){
+            Object[] tr = (Object[])list.get(i);
+            contentBuffer.append("\t" + tr[0]);
+            contentBuffer.append("\t总堆积数量：");
+            contentBuffer.append(tr[6]);
+            contentBuffer.append("\t<a href='http://" + configureInitializer.getDomain() + "/consumer/consumerProgress.do?groupName=" + tr[0] + "'> 查看 </a>");
+            contentBuffer.append("<br/>");
+        }
+        //判断重发次数，超过限制
+//        Cache
+        Boolean result = logMailService.sendHtmlEmail(configureInitializer.getEmailReceiver(), title, contentBuffer.toString());
+        if(result){
+
+            logger.info("消息堆积报警邮件发送成功");
+        }
+        else{
+            logger.error("消息堆积报警邮件发送失败！！！");
+        }
+    }
+
+    /**
+     * 每30分钟检测一次 堆积
+     */
+    @Scheduled(fixedDelay = 30 * 60 * 1000)
+    public void checkTopicStactOver(){
+        logger.info("开始检测消息堆积....");
+        long start = System.currentTimeMillis();
+        //查询消费者列表
+        try {
+            // System.out.printf("%-32s  %-6s  %-24s %-5s  %-14s  %-7s  %s\n",//
+            // "#Group",//
+            // "#Count",//
+            // "#Version",//
+            // "#Type",//
+            // "#Model",//
+            // "#TPS",//
+            // "#Diff Total"//
+            // );
+            Table table = consumerProgress(null);
+            List list = new ArrayList();
+            int size  = table.getTbodyData().size();
+            for(int i=0;i<size;i++){
+                Object[] tr = table.getTbodyData().get(i);
+                //记录超出积压阀值的消费组
+                if( (StringUtils.isNotBlank((String)tr[1]) && Integer.parseInt(tr[1].toString()) > 0) && StringUtils.isNotBlank((String) tr[4]) && ( (tr[6] != null && Integer.parseInt(tr[6].toString()) > configureInitializer.getStackOverNum())) ){
+                    list.add(tr);
+                }
+            }
+            if(list.size() >0){
+                //发送报警邮件
+                sendStackOverMail(list);
+            }
+        } catch (Throwable throwable) {
+            throwable.printStackTrace();
+        }
+        finally {
+            logger.info("消息堆积检测任务执行时长:{}ms", System.currentTimeMillis() - start);
+        }
+    }
 
     @CmdTrace(cmdClazz = ConsumerProgressSubCommand.class)
     public Table consumerProgress(String consumerGroup) throws Throwable {
@@ -92,8 +167,8 @@ public class ConsumerService extends AbstractService {
                     // diff //
                     // );
                     Object[] tr = table.createTR();
-                    tr[0] = UtilAll.frontStringAtLeast(mq.getTopic(), 32);
-                    tr[1] = UtilAll.frontStringAtLeast(mq.getBrokerName(), 32);
+                    tr[0] = mq.getTopic();//UtilAll.frontStringAtLeast(mq.getTopic(), 64);
+                    tr[1] = mq.getBrokerName();//UtilAll.frontStringAtLeast(mq.getBrokerName(), 64);
                     tr[2] = str(mq.getQueueId());
                     tr[3] = str(offsetWrapper.getBrokerOffset());
                     tr[4] = str(offsetWrapper.getConsumerOffset());
@@ -137,16 +212,14 @@ public class ConsumerService extends AbstractService {
                             ConsumeStats consumeStats = null;
                             try {
                                 consumeStats = defaultMQAdminExt.examineConsumeStats(tconsumerGroup);
-                            }
-                            catch (Exception e) {
+                            } catch (Exception e) {
                                 logger.warn("examineConsumeStats exception, " + tconsumerGroup, e);
                             }
 
                             ConsumerConnection cc = null;
                             try {
                                 cc = defaultMQAdminExt.examineConsumerConnectionInfo(tconsumerGroup);
-                            }
-                            catch (Exception e) {
+                            } catch (Exception e) {
                                 logger.warn("examineConsumerConnectionInfo exception, " + tconsumerGroup, e);
                             }
 
@@ -166,38 +239,37 @@ public class ConsumerService extends AbstractService {
                             }
 
                             groupConsumeInfoList.add(groupConsumeInfo);
-                        }
-                        catch (Exception e) {
+                        } catch (Exception e) {
                             logger.warn("examineConsumeStats or examineConsumerConnectionInfo exception, "
                                     + tconsumerGroup, e);
                         }
-                        Collections.sort(groupConsumeInfoList);
-
-                        Table table = new Table(thead, groupConsumeInfoList.size());
-                        for (GroupConsumeInfo info : groupConsumeInfoList) {
-                            // System.out.printf("%-32s  %-6d  %-24s %-5s  %-14s  %-7d  %d\n",//
-                            // UtilAll.frontStringAtLeast(info.getGroup(),
-                            // 32),//
-                            // info.getCount(),//
-                            // info.versionDesc(),//
-                            // info.consumeTypeDesc(),//
-                            // info.messageModelDesc(),//
-                            // info.getConsumeTps(),//
-                            // info.getDiffTotal()//
-                            // );
-                            Object[] tr = table.createTR();
-                            tr[0] = UtilAll.frontStringAtLeast(info.getGroup(), 32);
-                            tr[1] = str(info.getCount());
-                            tr[2] = info.versionDesc();
-                            tr[3] = info.consumeTypeDesc();
-                            tr[4] = info.messageModelDesc();
-                            tr[5] = str(info.getConsumeTps());
-                            tr[6] = str(info.getDiffTotal());
-                            table.insertTR(tr);
-                        }
-                        return table;
                     }
                 }
+                Collections.sort(groupConsumeInfoList);
+
+                Table table = new Table(thead, groupConsumeInfoList.size());
+                for (GroupConsumeInfo info : groupConsumeInfoList) {
+                    // System.out.printf("%-32s  %-6d  %-24s %-5s  %-14s  %-7d  %d\n",//
+                    // UtilAll.frontStringAtLeast(info.getGroup(),
+                    // 32),//
+                    // info.getCount(),//
+                    // info.versionDesc(),//
+                    // info.consumeTypeDesc(),//
+                    // info.messageModelDesc(),//
+                    // info.getConsumeTps(),//
+                    // info.getDiffTotal()//
+                    // );
+                    Object[] tr = table.createTR();
+                    tr[0] = UtilAll.frontStringAtLeast(info.getGroup(), 32);
+                    tr[1] = str(info.getCount());
+                    tr[2] = info.versionDesc();
+                    tr[3] = info.consumeTypeDesc();
+                    tr[4] = info.messageModelDesc();
+                    tr[5] = str(info.getConsumeTps());
+                    tr[6] = str(info.getDiffTotal());
+                    table.insertTR(tr);
+                }
+                return table;
             }
 
         }
