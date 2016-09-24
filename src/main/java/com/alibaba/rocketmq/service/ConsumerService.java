@@ -5,9 +5,9 @@ import static org.apache.commons.lang.StringUtils.isNotBlank;
 
 import java.util.*;
 
+import com.alibaba.rocketmq.cache.Cache;
 import com.alibaba.rocketmq.cache.CacheManager;
-import com.alibaba.rocketmq.common.protocol.body.GroupList;
-import com.alibaba.rocketmq.tools.command.topic.TopicListSubCommand;
+import com.alibaba.rocketmq.common.*;
 import org.apache.commons.cli.Option;
 import org.apache.commons.lang.StringUtils;
 import org.slf4j.Logger;
@@ -16,10 +16,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import com.alibaba.rocketmq.common.MQVersion;
-import com.alibaba.rocketmq.common.MixAll;
-import com.alibaba.rocketmq.common.Table;
-import com.alibaba.rocketmq.common.UtilAll;
 import com.alibaba.rocketmq.common.admin.ConsumeStats;
 import com.alibaba.rocketmq.common.admin.OffsetWrapper;
 import com.alibaba.rocketmq.common.message.MessageQueue;
@@ -75,11 +71,25 @@ public class ConsumerService extends AbstractService {
             contentBuffer.append("\t<a href='http://" + configureInitializer.getDomain() + "/consumer/consumerProgress.do?groupName=" + tr[0] + "'> 查看 </a>");
             contentBuffer.append("<br/>");
         }
-        //判断重发次数，超过限制
-//        Cache
+        //使用字符串的MD5值作为缓存键
+        String content = contentBuffer.toString();
+        String key = MD5Utils.md5(content);
+        //判断重发次数，有效时间内超过发送次数不再重发
+        Cache cache = cacheManager.getCacheInfo(key);
+        if(cache != null && Integer.parseInt(cache.getValue().toString()) >= configureInitializer.getAlarmMaxSendTimesInOnePeriod()){
+            logger.info("超出报警次数:{}，不发送报警信息，内容:{}", configureInitializer.getAlarmMaxSendTimesInOnePeriod(), content);
+            return ;
+        }
         Boolean result = logMailService.sendHtmlEmail(configureInitializer.getEmailReceiver(), title, contentBuffer.toString());
         if(result){
-
+            //记录发送缓存
+            if(cache == null){
+                cache = cacheManager.putCacheInfo(key, 0, configureInitializer.getAlarmOnePeriodSeconds()*1000);
+            }
+            //缓存计数递增，此处会有并发问题，因为目前是单线程处理，暂且认为不会有并发问题
+            Integer times = (Integer) cache.getValue() + 1;
+            cache.setValue(times);
+            cacheManager.putCache(key, cache);
             logger.info("消息堆积报警邮件发送成功");
         }
         else{

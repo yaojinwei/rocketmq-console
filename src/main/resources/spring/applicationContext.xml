@@ -34,6 +34,9 @@
         <property name="emailMonitorOn" value="${EMAIL_MONITOR_ON}"/>
         <property name="stackOverNum" value="${stack.over.nums}" />
         <property name="domain" value="${domain}"/>
+
+		<property name="alarmOnePeriodSeconds" value="${alarm.one.period.seconds}"/>
+		<property name="alarmMaxSendTimesInOnePeriod" value="${alarm.send.times.one.period}"/>
 	</bean>
 
 	<bean id="cmdValidator" class="com.alibaba.rocketmq.validate.CmdValidator">

@@ -33,6 +33,25 @@ public class ConfigureInitializer {
 
     private Integer stackOverNum = 100;
 
+    private Integer alarmOnePeriodSeconds =14400;
+    private Integer alarmMaxSendTimesInOnePeriod =3;
+
+    public Integer getAlarmOnePeriodSeconds() {
+        return alarmOnePeriodSeconds;
+    }
+
+    public void setAlarmOnePeriodSeconds(Integer alarmOnePeriodSeconds) {
+        this.alarmOnePeriodSeconds = alarmOnePeriodSeconds;
+    }
+
+    public Integer getAlarmMaxSendTimesInOnePeriod() {
+        return alarmMaxSendTimesInOnePeriod;
+    }
+
+    public void setAlarmMaxSendTimesInOnePeriod(Integer alarmMaxSendTimesInOnePeriod) {
+        this.alarmMaxSendTimesInOnePeriod = alarmMaxSendTimesInOnePeriod;
+    }
+
     public String getDomain() {
         return domain;
     }
